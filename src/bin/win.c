@@ -5551,9 +5551,9 @@ _tabs_close(Term_Container *tc, Term_Container *child)
    l = _tab_item_find(tabs, child, &pos);
    item = l->data;
 
-   next = eina_list_next(l);
+   next = eina_list_prev(l);
    if (!next)
-     next = tabs->tabs;
+     next = eina_list_next(l);
 
    tabs->tabs = eina_list_remove_list(tabs->tabs, l);
 
