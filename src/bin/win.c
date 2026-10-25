@@ -1390,7 +1390,7 @@ _win_has_tab_drag(const Win *wn)
 static Eina_Bool
 _win_keeps_lone_term_in_tabs(const Win *wn)
 {
-   return wn->config->show_tabs && wn->config->tabbar_always_show &&
+   return wn->config->show_tabs && wn->config->tabs_always_show &&
       !_win_has_tab_drag(wn);
 }
 

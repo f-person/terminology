@@ -37,7 +37,7 @@ OPTIONS_CB(Behavior_Ctx, urg_bell, 0);
 OPTIONS_CB(Behavior_Ctx, multi_instance, 0);
 OPTIONS_CB(Behavior_Ctx, erase_is_del, 0);
 OPTIONS_CB(Behavior_Ctx, login_shell, 0);
-OPTIONS_CB(Behavior_Ctx, tabbar_always_show, 0);
+OPTIONS_CB(Behavior_Ctx, tabs_always_show, 0);
 OPTIONS_CB(Behavior_Ctx, mv_always_show, 0);
 OPTIONS_CB(Behavior_Ctx, ty_escapes, 0);
 OPTIONS_CB(Behavior_Ctx, selection_escapes_write, 0);
@@ -432,7 +432,7 @@ _tabs_options_fill(Behavior_Ctx *ctx)
    if (!config->show_tabs)
      return;
 
-   OPTIONS_CX(_("Always show tabs"), tabbar_always_show, 0);
+   OPTIONS_CX(_("Always show tabs"), tabs_always_show, 0);
    evas_object_size_hint_align_set(o, 0.0, 0.5);
    elm_object_tooltip_text_set(o, _("Show tabs even when there is only one"));
    /* following the pointer, it jumps to the window edge when short of room */

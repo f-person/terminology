@@ -224,7 +224,7 @@ config_init(void)
    EET_DATA_DESCRIPTOR_ADD_BASIC
      (edd_base, Config, "tabs_side_width", tabs_side_width, EET_T_INT);
    EET_DATA_DESCRIPTOR_ADD_BASIC
-     (edd_base, Config, "tabbar_always_show", tabbar_always_show, EET_T_UCHAR);
+     (edd_base, Config, "tabs_always_show", tabs_always_show, EET_T_UCHAR);
    EET_DATA_DESCRIPTOR_ADD_BASIC
      (edd_base, Config, "mv_always_show", mv_always_show, EET_T_UCHAR);
    EET_DATA_DESCRIPTOR_ADD_BASIC
@@ -369,7 +369,7 @@ config_sync(const Config *config_src, Config *config)
    config->show_tabs = config_src->show_tabs;
    config->tabs_position = config_src->tabs_position;
    config->tabs_side_width = config_src->tabs_side_width;
-   config->tabbar_always_show = config_src->tabbar_always_show;
+   config->tabs_always_show = config_src->tabs_always_show;
    config->mv_always_show = config_src->mv_always_show;
    config->ty_escapes = config_src->ty_escapes;
    config->selection_escapes_write = config_src->selection_escapes_write;
@@ -656,7 +656,7 @@ config_new(void)
         config->show_tabs = EINA_TRUE;
         config->tabs_position = TABS_POSITION_TOP;
         config->tabs_side_width = TABS_SIDE_WIDTH_DEFAULT;
-        config->tabbar_always_show = EINA_FALSE;
+        config->tabs_always_show = EINA_FALSE;
         config->mv_always_show = EINA_FALSE;
         config->ty_escapes = EINA_TRUE;
         config->selection_escapes_write = EINA_TRUE;
@@ -904,7 +904,7 @@ config_load(void)
                 case 32:
                   config->tabs_position = TABS_POSITION_TOP;
                   config->tabs_side_width = TABS_SIDE_WIDTH_DEFAULT;
-                  config->tabbar_always_show = EINA_FALSE;
+                  config->tabs_always_show = EINA_FALSE;
                   EINA_FALLTHROUGH;
                   /*pass through*/
                 case CONF_VER: /* 33 */
@@ -1018,7 +1018,7 @@ config_fork(const Config *config)
    CPY(show_tabs);
    CPY(tabs_position);
    CPY(tabs_side_width);
-   CPY(tabbar_always_show);
+   CPY(tabs_always_show);
    CPY(mv_always_show);
    CPY(ty_escapes);
    CPY(selection_escapes_write);
@@ -1124,14 +1124,14 @@ tytest_config_erase_is_del_upgrade(void)
 
 static Config *
 _config_tabs_reloaded(int version, int position, int side_width,
-                      Eina_Bool tabbar_always_show)
+                      Eina_Bool tabs_always_show)
 {
    Config *config = config_new();
 
    config->version = version;
    config->tabs_position = position;
    config->tabs_side_width = side_width;
-   config->tabbar_always_show = tabbar_always_show;
+   config->tabs_always_show = tabs_always_show;
    config_save(config);
    config_del(config);
 
@@ -1153,36 +1153,36 @@ tytest_config_tabs(void)
    config_init();
 
    config = config_new();
-   assert(!config->tabbar_always_show);
+   assert(!config->tabs_always_show);
    config_del(config);
 
    config = _config_tabs_reloaded(CONF_VER, TABS_POSITION_RIGHT, 321,
                                   EINA_TRUE);
    assert(config->tabs_position == TABS_POSITION_RIGHT);
    assert(config->tabs_side_width == 321);
-   assert(config->tabbar_always_show);
+   assert(config->tabs_always_show);
    config_del(config);
 
    /* configs from before the options get the defaults */
    config = _config_tabs_reloaded(32, TABS_POSITION_LEFT, 0, EINA_TRUE);
    assert(config->tabs_position == TABS_POSITION_TOP);
    assert(config->tabs_side_width == TABS_SIDE_WIDTH_DEFAULT);
-   assert(!config->tabbar_always_show);
+   assert(!config->tabs_always_show);
    config_del(config);
 
    config = config_new();
    config->tabs_position = TABS_POSITION_LEFT;
    config->tabs_side_width = 345;
-   config->tabbar_always_show = EINA_TRUE;
+   config->tabs_always_show = EINA_TRUE;
    forked = config_fork(config);
    assert(forked->tabs_position == TABS_POSITION_LEFT);
    assert(forked->tabs_side_width == 345);
-   assert(forked->tabbar_always_show);
+   assert(forked->tabs_always_show);
    synced = config_new();
    config_sync(config, synced);
    assert(synced->tabs_position == TABS_POSITION_LEFT);
    assert(synced->tabs_side_width == 345);
-   assert(synced->tabbar_always_show);
+   assert(synced->tabs_always_show);
    config_del(synced);
    config_del(forked);
    config_del(config);
