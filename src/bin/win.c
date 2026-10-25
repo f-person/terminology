@@ -277,6 +277,8 @@ static void _tabs_tab_new(Tabs *tabs, const char *cmd);
 static void _tabs_side_reorder_end(void);
 static void _cb_tabs_side_tab_btn(void *data, Evas_Object *obj,
                                   const char *sig, const char *src);
+static Eina_Bool _tabs_has_single_tab(const Term_Container *tc);
+static Term_Container *_tabs_single_tab_release(Tabs *tabs);
 
 /* }}} */
 /* {{{ Utils */
@@ -1377,6 +1379,33 @@ _win_size_eval(Term_Container *tc, Sizeinfo *info)
    wn->child->size_eval(wn->child, info);
 }
 
+static Eina_Bool
+_win_has_tab_drag(const Win *wn)
+{
+   return _tab_drag && _tab_drag->term && (_tab_drag->term->wn == wn) &&
+      _tab_drag->icon;
+}
+
+/* not mid-drag: a drop may split the window, and splits hold bare terminals */
+static Eina_Bool
+_win_keeps_lone_term_in_tabs(const Win *wn)
+{
+   return wn->config->show_tabs && wn->config->tabbar_always_show &&
+      !_win_has_tab_drag(wn);
+}
+
+static void
+_win_lone_term_tabs_add(Win *wn)
+{
+   Term_Container *tc_tabs;
+
+   if (wn->child->type != TERM_CONTAINER_TYPE_SOLO)
+     return;
+   tc_tabs = _tabs_new(wn->child, &wn->tc);
+   if (tc_tabs)
+     tc_tabs->update(tc_tabs);
+}
+
 static void
 _win_swallow(Term_Container *tc, Term_Container *orig,
              Term_Container *new_child)
@@ -1401,8 +1430,7 @@ _win_swallow(Term_Container *tc, Term_Container *orig,
    if ((new_child->type == TERM_CONTAINER_TYPE_SOLO)
        && (wn->config->show_tabs))
      {
-        if (_tab_drag && _tab_drag->term && (_tab_drag->term->wn == wn) &&
-            _tab_drag->icon)
+        if (_win_has_tab_drag(wn))
           _solo_tab_show(new_child);
         else
           _solo_tab_hide(new_child);
@@ -1416,6 +1444,9 @@ _win_swallow(Term_Container *tc, Term_Container *orig,
      {
         evas_object_raise(_tab_drag->icon);
      }
+
+   if (_win_keeps_lone_term_in_tabs(wn))
+     _win_lone_term_tabs_add(wn);
 }
 
 static void
@@ -1427,12 +1458,14 @@ _win_close(Term_Container *tc,
    wn = (Win*) tc;
 
    DBG("win close");
-   if (_tab_drag && _tab_drag->term && (_tab_drag->term->wn == wn))
+   if (_win_has_tab_drag(wn))
      {
         _tab_drag->parent_type = TERM_CONTAINER_TYPE_WIN;
         _tab_drag_free();
         return;
      }
+   if (_tab_drag && _tab_drag->term && (_tab_drag->term->wn == wn))
+     _tab_drag_free();
    eina_stringshare_del(tc->title);
    win_free(wn);
 }
@@ -1597,6 +1630,8 @@ _win_split(Term_Container *tc, Term_Container *child,
         tc_solo_new = _solo_new(tm_new, wn);
         evas_object_data_set(tm_new->termio, "sizedone", tm_new->termio);
 
+        if (_tabs_has_single_tab(child))
+          child = _tabs_single_tab_release((Tabs*) child);
         elm_layout_content_unset(wn->base, "terminology.content");
 
         tc_split = _split_new(child, tc_solo_new, 0.5, is_horizontal);
@@ -1712,15 +1747,18 @@ _win_update(Term_Container *tc)
         for_each_term_do(wn, &_set_cursor, NULL);
      }
 
+   if (_win_keeps_lone_term_in_tabs(wn))
+     _win_lone_term_tabs_add(wn);
+   else if (_tabs_has_single_tab(wn->child))
+     tc->swallow(tc, NULL, _tabs_single_tab_release((Tabs*) wn->child));
+
    wn->child->update(wn->child);
 }
 
 Eina_Bool
 win_has_single_child(const Win *wn)
 {
-   const Term_Container *child = wn->child;
-
-   return (child->type == TERM_CONTAINER_TYPE_SOLO);
+   return eina_list_count(wn->terms) == 1;
 }
 
 static void
@@ -3486,6 +3524,41 @@ _term_tabs_side_width_apply(Term *term, void *_data EINA_UNUSED)
    return ECORE_CALLBACK_PASS_ON;
 }
 
+static Eina_Bool
+_tabs_side_item_close_button_contains(const Evas_Object *item,
+                                      Evas_Coord canvas_x,
+                                      Evas_Coord canvas_y)
+{
+   Eina_Rectangle close_button;
+   Evas_Coord x = 0, y = 0;
+
+   evas_object_geometry_get(item, &x, &y, NULL, NULL);
+   edje_object_part_geometry_get(item, "tabclose",
+                                 &close_button.x, &close_button.y,
+                                 &close_button.w, &close_button.h);
+   return eina_rectangle_coords_inside(&close_button,
+                                       canvas_x - x, canvas_y - y);
+}
+
+/* the resizer lies over the items: let the pointer reach the close button */
+static void
+_cb_tabs_side_bar_mouse_move(void *data,
+                             Evas *_e EINA_UNUSED,
+                             Evas_Object *_obj EINA_UNUSED,
+                             void *event)
+{
+   Tabs *tabs = data;
+   Evas_Event_Mouse_Move *ev = event;
+   Evas_Object *item = tabs->current->side_item;
+
+   if (tabs->side.is_resizing)
+     return;
+   evas_object_pass_events_set(tabs->side.resizer,
+                               item &&
+                               _tabs_side_item_close_button_contains(
+                                  item, ev->cur.canvas.x, ev->cur.canvas.y));
+}
+
 static void
 _cb_tabs_side_resizer_mouse_in(void *data,
                                Evas *_e EINA_UNUSED,
@@ -3806,19 +3879,13 @@ _cb_tabs_side_item_mouse_down(void *data,
    Tab_Item *tab_item = data;
    Evas_Event_Mouse_Down *ev = event;
    Tab_Side_Reorder *reorder = &_tab_side_reorder;
-   Eina_Rectangle close_button;
-   Evas_Coord x = 0, y = 0, pointer_y = 0;
+   Evas_Coord pointer_y = 0;
 
    /* the title popup of a double click may take the mouse up */
    if ((ev->button != 1) || (ev->flags & EVAS_BUTTON_DOUBLE_CLICK) ||
        (ev->event_flags & EVAS_EVENT_FLAG_ON_HOLD) || reorder->item)
      return;
-   evas_object_geometry_get(obj, &x, &y, NULL, NULL);
-   edje_object_part_geometry_get(obj, "tabclose",
-                                 &close_button.x, &close_button.y,
-                                 &close_button.w, &close_button.h);
-   if (eina_rectangle_coords_inside(&close_button,
-                                    ev->canvas.x - x, ev->canvas.y - y))
+   if (_tabs_side_item_close_button_contains(obj, ev->canvas.x, ev->canvas.y))
      return;
 
    assert(tab_item->tc->parent->type == TERM_CONTAINER_TYPE_TABS);
@@ -4041,6 +4108,8 @@ _tabs_side_create(Tabs *tabs)
    elm_layout_signal_emit(o, _tabs_side_position_signal(tabs), "terminology");
    elm_layout_signal_callback_add(o, "tab,*", "terminology",
                                   _cb_tabs_side_tab_btn, tabs);
+   evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_MOVE,
+                                  _cb_tabs_side_bar_mouse_move, tabs);
 
    tabs->side.bar_width = o = evas_object_rectangle_add(canvas);
    evas_object_color_set(o, 0, 0, 0, 0);
@@ -4347,7 +4416,8 @@ _term_on_horizontal_drag(void *data,
    double v1, v2, m;
 
    assert (tc->type == TERM_CONTAINER_TYPE_SOLO);
-   if (tc->parent->type != TERM_CONTAINER_TYPE_TABS)
+   if ((tc->parent->type != TERM_CONTAINER_TYPE_TABS) ||
+       _tabs_has_single_tab(tc->parent))
      {
         edje_object_part_drag_value_set(term->bg_edj, "terminology.tabl",
                                         0.0, 0.0);
@@ -4358,8 +4428,6 @@ _term_on_horizontal_drag(void *data,
 
    tabs = (Tabs*) tc_parent;
    n = eina_list_count(tabs->tabs);
-   if (n <= 1)
-     return;
 
    tab_item = tabs->current;
 
@@ -5028,16 +5096,17 @@ _tab_drag_start(void *data EINA_UNUSED)
    /* Start icons animation before actually drag-starts */
    Evas_Coord mx, my, w, h, ch_w, ch_h, core_w, core_h;
    Term *term = _tab_drag->term;
-   Evas_Object *o = elm_layout_add(term->bg);
+   Evas_Object *o;
    Evas_Object *img;
    Term_Container *tc = term->container;
    float ratio;
 
-   if (!term->container)
+   if (!term->container || win_has_single_child(term->wn))
      {
         _tab_drag_free();
         return ECORE_CALLBACK_CANCEL;
      }
+   o = elm_layout_add(term->bg);
 
    for_each_term_do(_tab_drag->term->wn, &_term_hdrag_off, NULL);
 
@@ -5528,6 +5597,38 @@ _tab_item_find(const Tabs *tabs, const Term_Container *child,
    return NULL;
 }
 
+static Eina_Bool
+_tabs_has_single_tab(const Term_Container *tc)
+{
+   return (tc->type == TERM_CONTAINER_TYPE_TABS) &&
+      (eina_list_count(((const Tabs*) tc)->tabs) == 1);
+}
+
+/* Frees the tabs and returns their only tab, with no parent yet */
+static Term_Container *
+_tabs_single_tab_release(Tabs *tabs)
+{
+   Term_Container *tc = (Term_Container*) tabs;
+   Tab_Item *tab_item = tabs->current;
+   Term_Container *child = tab_item->tc;
+   Term *term = _tab_item_to_term(tab_item);
+
+   assert(_tabs_has_single_tab(tc));
+   _tabs_restore(tabs);
+   _tabs_side_free(tabs);
+   _tabbar_clear(term);
+   elm_layout_signal_emit(term->bg, "tab_btn,off", "terminology");
+   elm_layout_signal_emit(term->bg, "tabcount,off", "terminology");
+   _tab_item_free(tab_item);
+   eina_list_free(tabs->tabs);
+   eina_stringshare_del(tc->title);
+   free(tc);
+
+   child->parent = NULL;
+   evas_object_show(child->get_evas_object(child));
+   return child;
+}
+
 static void
 _tabs_close(Term_Container *tc, Term_Container *child)
 {
@@ -5540,6 +5641,7 @@ _tabs_close(Term_Container *tc, Term_Container *child)
    Term *term;
    Solo *solo;
    int pos = 0;
+   Eina_Bool keeps_single_tab;
 
    /* TODO: figure out whether to move position if tab_drag */
 
@@ -5547,9 +5649,23 @@ _tabs_close(Term_Container *tc, Term_Container *child)
    tabs = (Tabs*)tc;
 
    tc_parent = tc->parent;
+   keeps_single_tab = (tc_parent->type == TERM_CONTAINER_TYPE_WIN) &&
+      _win_keeps_lone_term_in_tabs(tc->wn);
 
    l = _tab_item_find(tabs, child, &pos);
    item = l->data;
+
+   if (_tabs_has_single_tab(tc))
+     {
+        _tabs_side_free(tabs);
+        _tab_item_free(item);
+        tabs->tabs = eina_list_remove_list(tabs->tabs, l);
+        tabs->current = NULL;
+        tc_parent->close(tc_parent, tc);
+        eina_stringshare_del(tc->title);
+        free(tc);
+        return;
+     }
 
    next = eina_list_prev(l);
    if (!next)
@@ -5570,7 +5686,7 @@ _tabs_close(Term_Container *tc, Term_Container *child)
    elm_layout_signal_emit(term->bg, "tab_btn,off", "terminology");
 
    count = eina_list_count(tabs->tabs);
-   if (count == 1)
+   if ((count == 1) && !keeps_single_tab)
      {
         Term *next_term;
         Solo *next_solo;

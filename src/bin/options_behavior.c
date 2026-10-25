@@ -19,6 +19,7 @@ typedef struct tag_Behavior_Ctx {
      Evas_Object *op_w;
      Evas_Object *op_h;
      Evas_Object *op_wh_current;
+     Evas_Object *op_tabs_box;
      Evas_Object *op_tabs_side_width;
      Evas_Object *op_tabs_side_width_current;
      Evas_Object *backlock_label;
@@ -36,7 +37,7 @@ OPTIONS_CB(Behavior_Ctx, urg_bell, 0);
 OPTIONS_CB(Behavior_Ctx, multi_instance, 0);
 OPTIONS_CB(Behavior_Ctx, erase_is_del, 0);
 OPTIONS_CB(Behavior_Ctx, login_shell, 0);
-OPTIONS_CB(Behavior_Ctx, show_tabs,  0);
+OPTIONS_CB(Behavior_Ctx, tabbar_always_show, 0);
 OPTIONS_CB(Behavior_Ctx, mv_always_show, 0);
 OPTIONS_CB(Behavior_Ctx, ty_escapes, 0);
 OPTIONS_CB(Behavior_Ctx, selection_escapes_write, 0);
@@ -420,6 +421,39 @@ _add_tabs_position_option(Evas_Object *bx,
    _tabs_side_width_disabled_set(ctx);
 }
 
+/* an elm_box lays out hidden children too */
+static void
+_tabs_options_fill(Behavior_Ctx *ctx)
+{
+   Config *config = ctx->config;
+   Evas_Object *o, *bx = ctx->op_tabs_box;
+
+   elm_box_clear(bx);
+   if (!config->show_tabs)
+     return;
+
+   OPTIONS_CX(_("Always show tabs"), tabbar_always_show, 0);
+   evas_object_size_hint_align_set(o, 0.0, 0.5);
+   elm_object_tooltip_text_set(o, _("Show tabs even when there is only one"));
+   /* following the pointer, it jumps to the window edge when short of room */
+   elm_object_tooltip_orient_set(o, ELM_TOOLTIP_ORIENT_BOTTOM);
+   _add_tabs_position_option(bx, ctx);
+}
+
+static void
+_cb_op_show_tabs(void *data, Evas_Object *obj,
+                 void *_event EINA_UNUSED)
+{
+   Behavior_Ctx *ctx = data;
+   Config *config = ctx->config;
+
+   config->show_tabs = elm_check_state_get(obj);
+   _tabs_options_fill(ctx);
+   termio_config_update(ctx->term);
+   windows_update();
+   config_save(config);
+}
+
 static void
 _cursors_changed_cb(void *data, Evas_Object *obj,
                     void *event_info EINA_UNUSED)
@@ -615,7 +649,12 @@ options_behavior(Evas_Object *opbox, Evas_Object *term)
    evas_object_show(o);
 
    OPTIONS_CX(_("Show tabs"), show_tabs, 0);
-   _add_tabs_position_option(bx, ctx);
+   ctx->op_tabs_box = o = elm_box_add(bx);
+   evas_object_size_hint_weight_set(o, EVAS_HINT_EXPAND, 0.0);
+   evas_object_size_hint_align_set(o, EVAS_HINT_FILL, 0.0);
+   elm_box_pack_end(bx, o);
+   evas_object_show(o);
+   _tabs_options_fill(ctx);
    OPTIONS_SEPARATOR;
 
    OPTIONS_CX(_("Scroll to bottom on new content"), jump_on_change, 0);

@@ -1,4 +1,5 @@
 #define TABBAR_VERTICAL_RESIZE_W 13
+#define TABBAR_VERTICAL_CLOSE_GAP 6
 
 group { name: "terminology/tabbar_vertical/base";
    images.image: "icon-tab-btn-060.png" COMP;
@@ -337,7 +338,7 @@ group { name: "terminology/tabbar_vertical/item";
             rel2 {
                to_x: "tabclose";
                relative: 0.0 1.0;
-               offset: -5 -6;
+               offset: (-TABBAR_VERTICAL_CLOSE_GAP - 1) -6;
             }
             text {
                style: "tabbar_vertical_title";
@@ -365,12 +366,10 @@ group { name: "terminology/tabbar_vertical/item";
          scale: 1;
          description { state: "default" 0.0;
             image.normal: "tab_close";
-            rel1.to: "inner";
             rel1.relative: 1.0 0.0;
-            rel1.offset: -5 3;
-            rel2.to: "inner";
+            rel1.offset: (-TABBAR_VERTICAL_CLOSE_GAP - 1) 3;
             rel2.relative: 1.0 0.0;
-            rel2.offset: -5 3;
+            rel2.offset: (-TABBAR_VERTICAL_CLOSE_GAP - 1) 3;
             align: 1.0 0.0;
             max: 0 0;
             fixed: 1 1;

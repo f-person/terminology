@@ -281,7 +281,8 @@ Title of the tab, a TEXTBLOCK part.
 
 ## Special parts
 ### Part `tabclose`
-Close button of the current tab. Pressing it does not start a drag.
+Close button of the current tab. Pressing it does not start a drag. Where it
+lies over `terminology.resize` of the bar, it takes the mouse.
 
 ## Signal emitted
 ### Signal `tab,activate`
@@ -296,7 +297,7 @@ To notify that the user wants to set the title of that tab.
 Whether the item is the tab currently displayed.
 ### Signals `position,left` and `position,right`
 Whether the bar is on the left or on the right of the terminals, for the
-title and the close button to stay clear of `terminology.resize`.
+start of the title to stay clear of `terminology.resize`.
 ### Signals `drag,on` and `drag,off`
 When the tab is being dragged to another place in the list.
 ### Signal `bell`

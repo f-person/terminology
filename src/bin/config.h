@@ -130,6 +130,7 @@ struct tag_Config
    Eina_Bool         show_tabs;
    int               tabs_position;
    int               tabs_side_width; /* pixels */
+   Eina_Bool         tabbar_always_show;
    Eina_Bool         mv_always_show;
    Eina_Bool         ty_escapes;
    Eina_Bool         selection_escapes_write;
