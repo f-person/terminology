@@ -671,6 +671,13 @@ _start(Ipc_Instance *instance, Eina_Bool need_scale_wizard)
                   instance->cmds = eina_list_remove_list(instance->cmds,
                                                          instance->cmds);
                }
+             else if (instance->startup_split[i] == 't')
+               {
+                  cmd = eina_list_data_get(instance->cmds);
+                  tab_new(term_termio_get(next), cmd);
+                  instance->cmds = eina_list_remove_list(instance->cmds,
+                                                         instance->cmds);
+               }
              else if (instance->startup_split[i] == '-')
                next = term_next_get(next);
              else

@@ -53,6 +53,17 @@ typedef enum tag_Selection_Read
    SELECTION_READ_ALWAYS = 2,
 } Selection_Read;
 
+typedef enum tag_Tabs_Position
+{
+   TABS_POSITION_TOP = 0,
+   TABS_POSITION_LEFT = 1,
+   TABS_POSITION_RIGHT = 2,
+} Tabs_Position;
+
+#define TABS_SIDE_WIDTH_DEFAULT 200
+#define TABS_SIDE_WIDTH_MIN 60
+#define TABS_SIDE_WIDTH_MAX 1000
+
 struct tag_Config
 {
    int               version;
@@ -117,6 +128,8 @@ struct tag_Config
    Eina_Bool         gravatar;
    Eina_Bool         notabs; /* DEPRECATED */
    Eina_Bool         show_tabs;
+   int               tabs_position;
+   int               tabs_side_width; /* pixels */
    Eina_Bool         mv_always_show;
    Eina_Bool         ty_escapes;
    Eina_Bool         selection_escapes_write;

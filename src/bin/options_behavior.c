@@ -19,6 +19,8 @@ typedef struct tag_Behavior_Ctx {
      Evas_Object *op_w;
      Evas_Object *op_h;
      Evas_Object *op_wh_current;
+     Evas_Object *op_tabs_side_width;
+     Evas_Object *op_tabs_side_width_current;
      Evas_Object *backlock_label;
      char *backlog_msg;
 } Behavior_Ctx;
@@ -297,6 +299,128 @@ _add_selection_read_option(Evas_Object *bx,
 }
 
 static void
+_tabs_side_width_disabled_set(Behavior_Ctx *ctx)
+{
+   Eina_Bool disabled = (ctx->config->tabs_position == TABS_POSITION_TOP);
+
+   elm_object_disabled_set(ctx->op_tabs_side_width, disabled);
+   elm_object_disabled_set(ctx->op_tabs_side_width_current, disabled);
+}
+
+static void
+_tabs_position_changed_cb(void *data, Evas_Object *obj,
+                          void *event_info EINA_UNUSED)
+{
+   Behavior_Ctx *ctx = data;
+   Config *config = ctx->config;
+
+   config->tabs_position = elm_radio_value_get(obj);
+   _tabs_side_width_disabled_set(ctx);
+
+   termio_config_update(ctx->term);
+   windows_update();
+   config_save(config);
+}
+
+static void
+_cb_op_behavior_tabs_side_width_current_set(void *data,
+                                            Evas_Object *_obj EINA_UNUSED,
+                                            void *_event EINA_UNUSED)
+{
+   Behavior_Ctx *ctx = data;
+   Config *config = ctx->config;
+   Win *wn = win_evas_object_to_win(termio_win_get(ctx->term));
+
+   if (!wn)
+     return;
+   config->tabs_side_width = win_tabs_side_width_get(wn);
+   elm_spinner_value_set(ctx->op_tabs_side_width, config->tabs_side_width);
+   config_save(config);
+}
+
+static void
+_cb_op_behavior_tabs_side_width(void *data,
+                                Evas_Object *obj,
+                                void *_event EINA_UNUSED)
+{
+   Behavior_Ctx *ctx = data;
+   Config *config = ctx->config;
+
+   config->tabs_side_width = (int) elm_spinner_value_get(obj);
+   config_save(config);
+}
+
+static void
+_add_tabs_position_option(Evas_Object *bx,
+                          Behavior_Ctx *ctx)
+{
+   Evas_Object *o, *rd, *rdg = NULL;
+   int i;
+   const char *const labels[] =
+   {
+      [TABS_POSITION_TOP] = _("Top"),
+      [TABS_POSITION_LEFT] = _("Left"),
+      [TABS_POSITION_RIGHT] = _("Right"),
+   };
+
+   o = elm_label_add(bx);
+   evas_object_size_hint_weight_set(o, EVAS_HINT_EXPAND, 0.0);
+   evas_object_size_hint_align_set(o, 0.0, 0.0);
+   elm_layout_text_set(o, NULL, _("Tabs position:"));
+   elm_box_pack_end(bx, o);
+   evas_object_show(o);
+
+   for (i = 0; i < (int)EINA_C_ARRAY_LENGTH(labels); i++)
+     {
+        rd = elm_radio_add(bx);
+        evas_object_size_hint_weight_set(rd, EVAS_HINT_EXPAND, 0.0);
+        evas_object_size_hint_align_set(rd, EVAS_HINT_FILL, 0.5);
+        elm_object_text_set(rd, labels[i]);
+        elm_radio_state_value_set(rd, i);
+        if (!rdg)
+          rdg = rd;
+        else
+          elm_radio_group_add(rd, rdg);
+        elm_box_pack_end(bx, rd);
+        evas_object_show(rd);
+        evas_object_smart_callback_add(rd, "changed",
+                                       _tabs_position_changed_cb, ctx);
+     }
+
+   elm_radio_value_set(rdg, ctx->config->tabs_position);
+
+   ctx->op_tabs_side_width_current = o = elm_button_add(bx);
+   evas_object_size_hint_weight_set(o, 0.0, 0.0);
+   evas_object_size_hint_align_set(o, 0.0, 0.5);
+   elm_object_text_set(o, _("Set Current:"));
+   elm_box_pack_end(bx, o);
+   evas_object_show(o);
+   evas_object_smart_callback_add(o, "clicked",
+                                  _cb_op_behavior_tabs_side_width_current_set,
+                                  ctx);
+
+   o = elm_label_add(bx);
+   evas_object_size_hint_weight_set(o, 0.0, 0.0);
+   evas_object_size_hint_align_set(o, 0.0, 0.5);
+   elm_object_text_set(o, _("Width of side tabs in new windows (pixels):"));
+   elm_box_pack_end(bx, o);
+   evas_object_show(o);
+
+   ctx->op_tabs_side_width = o = elm_spinner_add(bx);
+   elm_spinner_editable_set(o, EINA_TRUE);
+   elm_spinner_min_max_set(o, TABS_SIDE_WIDTH_MIN, TABS_SIDE_WIDTH_MAX);
+   evas_object_size_hint_weight_set(o, EVAS_HINT_EXPAND, 0.0);
+   evas_object_size_hint_align_set(o, EVAS_HINT_FILL, 0.5);
+   elm_spinner_value_set(o, ctx->config->tabs_side_width);
+   elm_box_pack_end(bx, o);
+   evas_object_show(o);
+   evas_object_smart_callback_add(o, "changed",
+                                  _cb_op_behavior_tabs_side_width, ctx);
+
+   _tabs_side_width_disabled_set(ctx);
+}
+
+static void
 _cursors_changed_cb(void *data, Evas_Object *obj,
                     void *event_info EINA_UNUSED)
 {
@@ -491,6 +615,7 @@ options_behavior(Evas_Object *opbox, Evas_Object *term)
    evas_object_show(o);
 
    OPTIONS_CX(_("Show tabs"), show_tabs, 0);
+   _add_tabs_position_option(bx, ctx);
    OPTIONS_SEPARATOR;
 
    OPTIONS_CX(_("Scroll to bottom on new content"), jump_on_change, 0);

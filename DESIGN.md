@@ -25,6 +25,7 @@ A simple documentation to navigate through the C files:
 * `src/bin/options_video.c`: the settings panel to configure video rendering
 * `src/bin/options_wallpaper.c`: the settings panel to configure a wallpaper
 * `src/bin/sel.c`: the tab selector
+* `src/bin/tab_reorder.c`: where a tab dragged in a vertical tab bar lands
 * `src/bin/termcmd.c` handles custom terminology commands
 * `src/bin/termio.c`: the core term widget with the textgrid
 * `src/bin/termiolink.c`: link detection in the terminal

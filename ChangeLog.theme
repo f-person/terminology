@@ -2,6 +2,16 @@
 Terminology 1.14.0
 ==================
 
+Changes since 1.14.0:
+--------------------
+  * Add groups "terminology/tabbar_vertical/base" and
+  "terminology/tabbar_vertical/item", used when the tab bar is on the left
+  or on the right of the terminals.
+  * In group "terminology/sel/item", the integer message 1 sets the opacity
+  of the background, in percent, as in group "terminology/background", and
+  the integer message 2 tells how far the tab selector is zoomed in, from 0
+  (the grid of terminals) to 100 (one terminal filling it).
+
 Changes since 1.12.1:
 --------------------
   * Add part "terminology.fade" in group "terminology/core" to set the color

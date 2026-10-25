@@ -7,7 +7,7 @@
 #include "colors.h"
 #include "theme.h"
 
-#define CONF_VER 32
+#define CONF_VER 33
 #define CONFIG_KEY "config"
 
 #define LIM(v, min, max) {if (v >= max) v = max; else if (v <= min) v = min;}
@@ -220,6 +220,10 @@ config_init(void)
    EET_DATA_DESCRIPTOR_ADD_BASIC
      (edd_base, Config, "show_tabs", show_tabs, EET_T_UCHAR);
    EET_DATA_DESCRIPTOR_ADD_BASIC
+     (edd_base, Config, "tabs_position", tabs_position, EET_T_INT);
+   EET_DATA_DESCRIPTOR_ADD_BASIC
+     (edd_base, Config, "tabs_side_width", tabs_side_width, EET_T_INT);
+   EET_DATA_DESCRIPTOR_ADD_BASIC
      (edd_base, Config, "mv_always_show", mv_always_show, EET_T_UCHAR);
    EET_DATA_DESCRIPTOR_ADD_BASIC
      (edd_base, Config, "ty_escapes", ty_escapes, EET_T_UCHAR);
@@ -361,6 +365,8 @@ config_sync(const Config *config_src, Config *config)
    /* TODO: config->keys */
    config->gravatar = config_src->gravatar;
    config->show_tabs = config_src->show_tabs;
+   config->tabs_position = config_src->tabs_position;
+   config->tabs_side_width = config_src->tabs_side_width;
    config->mv_always_show = config_src->mv_always_show;
    config->ty_escapes = config_src->ty_escapes;
    config->selection_escapes_write = config_src->selection_escapes_write;
@@ -645,6 +651,8 @@ config_new(void)
         config->colors_use = EINA_FALSE;
         config->gravatar = EINA_TRUE;
         config->show_tabs = EINA_TRUE;
+        config->tabs_position = TABS_POSITION_TOP;
+        config->tabs_side_width = TABS_SIDE_WIDTH_DEFAULT;
         config->mv_always_show = EINA_FALSE;
         config->ty_escapes = EINA_TRUE;
         config->selection_escapes_write = EINA_TRUE;
@@ -889,7 +897,12 @@ config_load(void)
                   config->erase_is_del = EINA_TRUE;
                   EINA_FALLTHROUGH;
                   /*pass through*/
-                case CONF_VER: /* 32 */
+                case 32:
+                  config->tabs_position = TABS_POSITION_TOP;
+                  config->tabs_side_width = TABS_SIDE_WIDTH_DEFAULT;
+                  EINA_FALLTHROUGH;
+                  /*pass through*/
+                case CONF_VER: /* 33 */
                   /* selection_escapes used to gate reads too; a config
                    * with it off must not start answering read queries
                    * through the new ask default */
@@ -998,6 +1011,8 @@ config_fork(const Config *config)
    CPY(font_set);
    CPY(gravatar);
    CPY(show_tabs);
+   CPY(tabs_position);
+   CPY(tabs_side_width);
    CPY(mv_always_show);
    CPY(ty_escapes);
    CPY(selection_escapes_write);
@@ -1090,6 +1105,73 @@ tytest_config_erase_is_del_upgrade(void)
    assert(_config_erase_is_del_after_reload(31, EINA_FALSE) == EINA_TRUE);
    assert(_config_erase_is_del_after_reload(CONF_VER, EINA_FALSE) == EINA_FALSE);
    assert(_config_erase_is_del_after_reload(CONF_VER, EINA_TRUE) == EINA_TRUE);
+
+   config_shutdown();
+   ecore_file_recursive_rm(dir);
+   if (saved_home)
+     setenv("XDG_CONFIG_HOME", saved_home, 1);
+   else
+     unsetenv("XDG_CONFIG_HOME");
+   free(saved_home);
+   return 0;
+}
+
+static void
+_config_tabs_after_reload(int version, int position, int side_width,
+                          int *position_out, int *side_width_out)
+{
+   Config *config = config_new();
+
+   config->version = version;
+   config->tabs_position = position;
+   config->tabs_side_width = side_width;
+   config_save(config);
+   config_del(config);
+
+   config = config_load();
+   assert(config->version == CONF_VER);
+   *position_out = config->tabs_position;
+   *side_width_out = config->tabs_side_width;
+   config_del(config);
+}
+
+int
+tytest_config_tabs_position(void)
+{
+   char dir[] = "/tmp/tytest-config-XXXXXX";
+   const char *old_home = getenv("XDG_CONFIG_HOME");
+   char *saved_home = old_home ? strdup(old_home) : NULL;
+   Config *config, *forked, *synced;
+   int position, side_width;
+
+   assert(mkdtemp(dir));
+   setenv("XDG_CONFIG_HOME", dir, 1);
+   config_init();
+
+   _config_tabs_after_reload(CONF_VER, TABS_POSITION_RIGHT, 321,
+                             &position, &side_width);
+   assert(position == TABS_POSITION_RIGHT);
+   assert(side_width == 321);
+
+   /* configs from before the option get the defaults */
+   _config_tabs_after_reload(32, TABS_POSITION_LEFT, 0,
+                             &position, &side_width);
+   assert(position == TABS_POSITION_TOP);
+   assert(side_width == TABS_SIDE_WIDTH_DEFAULT);
+
+   config = config_new();
+   config->tabs_position = TABS_POSITION_LEFT;
+   config->tabs_side_width = 345;
+   forked = config_fork(config);
+   assert(forked->tabs_position == TABS_POSITION_LEFT);
+   assert(forked->tabs_side_width == 345);
+   synced = config_new();
+   config_sync(config, synced);
+   assert(synced->tabs_position == TABS_POSITION_LEFT);
+   assert(synced->tabs_side_width == 345);
+   config_del(synced);
+   config_del(forked);
+   config_del(config);
 
    config_shutdown();
    ecore_file_recursive_rm(dir);

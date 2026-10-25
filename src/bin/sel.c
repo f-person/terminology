@@ -25,6 +25,8 @@ struct tag_Sel
    double last_cmd;
    double interp;
    double orig_zoom;
+   int opacity;
+   int zoomed_in;
    Evas_Coord px, px0, px1;
    Evas_Coord py, py0, py1;
    int w, h;
@@ -355,6 +357,52 @@ sel_key_down(Evas_Object *obj,
 }
 
 static void
+_entries_message_send(Sel *sd, int id, int val)
+{
+   Eina_List *l;
+   Entry *en;
+   Edje_Message_Int msg;
+
+   msg.val = val;
+   EINA_LIST_FOREACH(sd->items, l, en)
+     {
+        edje_object_message_send(en->bg, EDJE_MESSAGE_INT, id, &msg);
+        edje_object_message_signal_process(en->bg);
+     }
+}
+
+/* As the selector zooms in on a term, the terms go from opaque to their own
+ * opacity and their title fades out. */
+static void
+_zoom_messages_send(Sel *sd)
+{
+   double zoomed_in = 1.0;
+   int percent;
+
+   if (sd->orig_zoom < 1.0)
+     zoomed_in = (sd->zoom - sd->orig_zoom) / (1.0 - sd->orig_zoom);
+   if (zoomed_in < 0.0)
+     zoomed_in = 0.0;
+   else if (zoomed_in > 1.0)
+     zoomed_in = 1.0;
+
+   percent = zoomed_in * 100;
+   if (percent != sd->zoomed_in)
+     {
+        sd->zoomed_in = percent;
+        _entries_message_send(sd, 2, percent);
+     }
+   if ((!sd->config) || (!sd->config->translucent))
+     return;
+   percent = 100 + (sd->config->opacity - 100) * zoomed_in;
+   if (percent != sd->opacity)
+     {
+        sd->opacity = percent;
+        _entries_message_send(sd, 1, percent);
+     }
+}
+
+static void
 _layout(Sel *sd)
 {
    int iw, ih, x, y;
@@ -368,6 +416,7 @@ _layout(Sel *sd)
    if (iw < 1) iw = 1;
    ih = DIV_ROUND_UP(eina_list_count(sd->items), iw);
    if (ih < 1) ih = 1;
+   _zoom_messages_send(sd);
    evas_object_geometry_get(sd->self, &ox, &oy, &ow, &oh);
    w = ow * sd->zoom;
    h = oh * sd->zoom;
@@ -714,6 +763,8 @@ sel_add(Evas_Object *parent)
    evas_object_event_callback_add(sd->o_event, EVAS_CALLBACK_MOUSE_MOVE,
                                   _mouse_move_cb, sd);
    sd->zoom = 1.0;
+   sd->opacity = -1;
+   sd->zoomed_in = -1;
 
    return obj;
 }
@@ -731,6 +782,8 @@ sel_entry_add(Evas_Object *obj, Evas_Object *entry,
    en->selected = selected;
    en->selected_before = selected;
    en->selected_orig = selected;
+   sd->opacity = -1;
+   sd->zoomed_in = -1;
    en->bg = edje_object_add(evas_object_evas_get(obj));
    theme_apply(en->bg, config, "terminology/sel/item",
                NULL, NULL, EINA_FALSE);
@@ -832,6 +885,22 @@ sel_entry_selected_set(Evas_Object *obj, Evas_Object *entry, Eina_Bool keep_befo
      }
    sd->use_px = EINA_FALSE;
    _transit(sd, config->tab_zoom);
+}
+
+Evas_Object *
+sel_entry_selected_get(const Evas_Object *obj)
+{
+   Sel *sd = evas_object_smart_data_get(obj);
+   Eina_List *l;
+   Entry *en;
+
+   if (!sd) return NULL;
+   EINA_LIST_FOREACH(sd->items, l, en)
+     {
+        if (en->selected)
+          return en->obj;
+     }
+   return NULL;
 }
 
 void

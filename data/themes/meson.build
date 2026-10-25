@@ -14,6 +14,7 @@ default_deps = [
   'default/core.edc',
   'default/background.edc',
   'default/tabbar_back.edc',
+  'default/tabbar_vertical.edc',
   'default/base.edc',
   'default/selection.edc',
   'default/cursor.edc',

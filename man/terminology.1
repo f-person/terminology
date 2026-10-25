@@ -56,6 +56,7 @@ Terminology can start with splits opened as described below.
 The arguments are a string with the following characters:
  \fB\-S v\fP splits terminal vertically
  \fB\-S h\fP splits horizontally
+ \fB\-S t\fP opens a new tab
  \fB\-\fP defines a placeholder for a shell or a command when used with
  \fB\-\-exec\fP/\fB\-e\fP
  Examples:
@@ -78,6 +79,9 @@ The arguments are a string with the following characters:
                          ______
  $ \fBterminology \-S vh--h\fP  |__|__|
                   \fBhv--v\fP  |__|__|
+
+ Three tabs, each running its own command:
+ $ \fBterminology \-S tt \-e cmd1 cmd2 cmd3\fP
  Type: STR.
 .
 .TP

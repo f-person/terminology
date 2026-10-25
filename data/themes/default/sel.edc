@@ -66,6 +66,29 @@ group { name: "terminology/sel/base";
 
 group { name: "terminology/sel/item";
    images.image: "pm_shadow.png" COMP;
+   script {
+      public message(Msg_Type:type, id, ...) {
+         new r, g, b, a, v;
+
+         if (type != MSG_INT)
+         return;
+         if (id == 1) { // opacity
+            v = (getarg(2) * 255) / 100;
+
+            custom_state(PART:"base", "default", 0.0);
+            get_state_val(PART:"base", STATE_COLOR, r, g, b, a);
+            set_state_val(PART:"base", STATE_COLOR, r, g, b, v);
+            set_state(PART:"base", "custom", 0.0);
+         } else if (id == 2) { // zoomed in
+            v = ((100 - getarg(2)) * 255) / 100;
+
+            custom_state(PART:"label_clip", "default", 0.0);
+            get_state_val(PART:"label_clip", STATE_COLOR, r, g, b, a);
+            set_state_val(PART:"label_clip", STATE_COLOR, r, g, b, v);
+            set_state(PART:"label_clip", "custom", 0.0);
+         }
+      }
+   }
    parts {
       ////////////////////////////////////////////////////////////////////
       // base background and selection image
@@ -89,6 +112,7 @@ group { name: "terminology/sel/item";
             rel2.offset: 31 31;
             image.normal: "pm_shadow.png";
             image.border: 64 64 64 64;
+            image.middle: 0;
             image.border_scale_by: 0.5;
             image.border_scale: 1;
             color_class: "/shadow/normal/term/sel/item";
@@ -151,7 +175,12 @@ group { name: "terminology/sel/item";
 
       ////////////////////////////////////////////////////////////////////
       // fancy stuff over the top of the terminal for shading and labelling
+      part { name: "label_clip"; type: RECT;
+         description { state: "default" 0.0;
+         }
+      }
       part { name: "terminology.label"; type: TEXT; mouse_events: 0;
+         clip_to: "label_clip";
          scale: 1;
          description { state: "default" 0.0;
             rel.to: "terminology.content";

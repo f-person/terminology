@@ -56,6 +56,7 @@ terminology_sources = ['private.h',
                        'gravatar.c', 'gravatar.h',
                        'tty_keys.h',
                        'sb.c', 'sb.h',
+                       'tab_reorder.c', 'tab_reorder.h',
                        'uri_decode.c', 'uri_decode.h']
 
 tybg_sources = ['tycommon.c', 'tycommon.h', 'tybg.c']
@@ -99,6 +100,7 @@ tytest_sources = [color_names,
                   'colors.c', 'colors.h',
                   'extns.c', 'extns.h',
                   'sb.c', 'sb.h',
+                  'tab_reorder.c', 'tab_reorder.h',
                   'utf8.c', 'utf8.h',
                   simd_sources,
                   'utils.c', 'utils.h',

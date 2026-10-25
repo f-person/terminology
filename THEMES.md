@@ -245,6 +245,69 @@ When input is broadcast to multiple terminals.
 
 
 
+# Group `terminology/tabbar_vertical/base`
+The tab bar when tabs are on the left or on the right of the terminals.
+## Swallowed parts
+### Part `terminology.content`
+The scrollable list of `terminology/tabbar_vertical/item` objects.
+### Part `terminology.resize`
+The area to drag to resize the bar, along the edge facing the terminals.
+### Part `terminology.width`
+An object as wide as the bar. The bar is narrower than that while it slides
+in or out with the tab selector: lay it out at this width, along the edge
+facing the terminals.
+
+## Signal emitted
+### Signal `tab,go`
+To show the tab selector.
+### Signal `tab,new`
+To open a new tab.
+### Signals `tab,prev` and `tab,next`
+To go to the previous or the next tab.
+
+## Signals received
+### Signals `position,left` and `position,right`
+Whether the bar is on the left or on the right of the terminals.
+### Signals `resize,on` and `resize,off`
+When the mouse enters or leaves `terminology.resize`, or a resize ends.
+
+
+
+# Group `terminology/tabbar_vertical/item`
+A tab in a left or right tab bar. Its height follows its wrapped title.
+## Text parts
+### Part `terminology.title`
+Title of the tab, a TEXTBLOCK part.
+
+## Special parts
+### Part `tabclose`
+Close button of the current tab. Pressing it does not start a drag.
+
+## Signal emitted
+### Signal `tab,activate`
+When clicked on it, to notify that the user wants to go to that tab.
+### Signal `tab,close`
+To notify that the user wants to close that tab.
+### Signal `tab,title`
+To notify that the user wants to set the title of that tab.
+
+## Signals received
+### Signals `selected` and `unselected`
+Whether the item is the tab currently displayed.
+### Signals `position,left` and `position,right`
+Whether the bar is on the left or on the right of the terminals, for the
+title and the close button to stay clear of `terminology.resize`.
+### Signals `drag,on` and `drag,off`
+When the tab is being dragged to another place in the list.
+### Signal `bell`
+To mark the tab as having missed a bell.
+### Signal `bell,off`
+To unmark the tab as having missed a bell.
+### Signals `grouped,on` and `grouped,off`
+When input is broadcast to multiple terminals.
+
+
+
 # Group `terminology/keybinding`
 __TODO__
 

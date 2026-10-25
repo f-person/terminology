@@ -217,6 +217,7 @@ collections {
    #include "default/core.edc"
    #include "default/background.edc"
    #include "default/tabbar_back.edc"
+   #include "default/tabbar_vertical.edc"
    #include "default/base.edc"
    #include "default/selection.edc"
    #include "default/cursor.edc"

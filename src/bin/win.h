@@ -21,6 +21,7 @@ Eina_Bool term_tab_go(Term *term, int tnum);
 
 void split_horizontally(Evas_Object *term, const char *cmd);
 void split_vertically(Evas_Object *term, const char *cmd);
+void tab_new(Evas_Object *term, const char *cmd);
 
 
 Win *
@@ -45,6 +46,7 @@ Win *win_evas_object_to_win(const Evas_Object *win);
 Evas_Object *win_evas_object_get(const Win *win);
 Eina_List * win_terms_get(const Win *wn);
 Config *win_config_get(const Win *wn);
+int win_tabs_side_width_get(const Win *wn);
 void win_term_swallow(Win *wn, Term *term);
 void win_add_split(Win *wn, Term *term);
 void win_sizing_handle(Win *wn);

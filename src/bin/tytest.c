@@ -76,6 +76,8 @@ static struct {
        { "keyin_modify_other_keys_level1", tytest_keyin_modify_other_keys_level1},
        { "keyin_backspace", tytest_keyin_backspace},
        { "config_erase_is_del_upgrade", tytest_config_erase_is_del_upgrade},
+       { "config_tabs_position", tytest_config_tabs_position},
+       { "tab_reorder_index", tytest_tab_reorder_index},
        { "vs16_regression_no_scroll", tytest_vs16_regression_no_scroll},
        { "vs16_bare_narrow", tytest_vs16_bare_narrow},
        { "vs16_widens_one_call", tytest_vs16_widens_one_call},

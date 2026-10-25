@@ -19,6 +19,7 @@
 #include "controls.h"
 #include "keyin.h"
 #include "term_container.h"
+#include "tab_reorder.h"
 
 
 /**
@@ -64,6 +65,8 @@ int _win_log_dom = -1;
 #define PANES_BOTTOM "bottom"
 
 #define DRAG_TIMEOUT 0.4
+#define TABS_SIDE_SHARE_MAX 0.5
+#define TABS_SIDE_GLIDE_TIME 0.15
 
 /* {{{ Structs */
 
@@ -73,6 +76,7 @@ typedef struct tag_Solo Solo;
 typedef struct tag_Tabs Tabs;
 typedef struct tag_Tab_Item Tab_Item;
 typedef struct tag_Tab_Drag Tab_Drag;
+typedef struct tag_Tab_Side_Reorder Tab_Side_Reorder;
 
 
 struct tag_Tab_Drag
@@ -162,6 +166,11 @@ struct tag_Tab_Item {
      Term_Container *tc;
      Evas_Object *obj;
      void *selector_entry;
+     Evas_Object *side_item;
+     Evas_Coord glide_from;
+     Evas_Coord glide_to;
+     double glide_start;
+     Eina_Bool is_gliding;
 };
 
 struct tag_Tabs {
@@ -172,6 +181,33 @@ struct tag_Tabs {
      Tab_Item *current;
      double v1_orig;
      double v2_orig;
+     /* Tab bar on the left or right */
+     struct {
+        Evas_Object *frame;
+        Evas_Object *bar;
+        Evas_Object *bar_spacer;
+        Evas_Object *bar_width;
+        Evas_Object *content;
+        Evas_Object *scroller;
+        Evas_Object *list;
+        Evas_Object *resizer;
+        Tabs_Position position;
+        Evas_Coord resize_press_x;
+        int resize_press_width;
+        Eina_Bool is_resizing;
+        double shown;
+        double shown_from;
+        double shown_to;
+        Ecore_Animator *shown_anim;
+        Ecore_Animator *glide_anim;
+     } side;
+};
+
+struct tag_Tab_Side_Reorder {
+     Tabs *tabs;
+     Tab_Item *item;
+     Evas_Coord press_dy;
+     Eina_Bool is_reordering;
 };
 
 struct tag_Split
@@ -205,6 +241,7 @@ struct tag_Win
    Ecore_Timer *cmdbox_del_timer;
    Ecore_Timer *hide_cursor_timer;
    Ecore_Event_Handler *config_elm_handler;
+   int tabs_side_width;
    unsigned char focused : 1;
    unsigned char cmdbox_up : 1;
    unsigned char group_input : 1;
@@ -219,6 +256,7 @@ struct tag_Win
 /* {{{ static */
 static Eina_List   *wins = NULL;
 static Tab_Drag *_tab_drag = NULL;
+static Tab_Side_Reorder _tab_side_reorder;
 
 static Eina_Bool _win_is_focused(Win *wn);
 static Term_Container *_solo_new(Term *term, Win *wn);
@@ -230,12 +268,15 @@ static void _term_media_update(Term *term, const Config *config);
 static void _term_miniview_check(Term *term);
 static void _popmedia_queue_process(Term *term);
 static void _cb_size_hint(void *data, Evas *_e EINA_UNUSED, Evas_Object *obj, void *_event EINA_UNUSED);
-static void _tab_new_cb(void *data, Evas_Object *_obj EINA_UNUSED, void *_event_info EINA_UNUSED);
 static Tab_Item* tab_item_new(Tabs *tabs, Term_Container *child);
 static void _tabs_recreate(Tabs *tabs);
 static void _tab_drag_free(void);
 static void _term_tabregion_free(Term *term);
 static void _imf_event_commit_cb(void *data, Ecore_IMF_Context *_ctx EINA_UNUSED, void *event);
+static void _tabs_tab_new(Tabs *tabs, const char *cmd);
+static void _tabs_side_reorder_end(void);
+static void _cb_tabs_side_tab_btn(void *data, Evas_Object *obj,
+                                  const char *sig, const char *src);
 
 /* }}} */
 /* {{{ Utils */
@@ -535,11 +576,11 @@ _solo_close(Term_Container *tc,
 }
 
 static void
-_solo_tabs_new(Term_Container *tc)
+_solo_tabs_new(Term_Container *tc, const char *cmd)
 {
    if (tc->parent->type != TERM_CONTAINER_TYPE_TABS)
      _tabs_new(tc, tc->parent);
-   _tab_new_cb(tc->parent, NULL, NULL);
+   _tabs_tab_new((Tabs*) tc->parent, cmd);
 }
 
 static void
@@ -1039,6 +1080,12 @@ Config *
 win_config_get(const Win *wn)
 {
    return wn->config;
+}
+
+int
+win_tabs_side_width_get(const Win *wn)
+{
+   return wn->tabs_side_width;
 }
 
 Eina_List *
@@ -2232,6 +2279,7 @@ win_new(const char *name, const char *role, const char *title,
    config_default_font_set(config, evas_object_evas_get(wn->win));
 
    wn->config = config_fork(config);
+   wn->tabs_side_width = wn->config->tabs_side_width;
 
    evas_object_event_callback_add(wn->win, EVAS_CALLBACK_DEL, _cb_del, wn);
 
@@ -2414,6 +2462,9 @@ _win_toggle_group(Win *wn)
              if (term->tab_inactive)
                edje_object_signal_emit(term->tab_inactive,
                                        "grouped,on", "terminology");
+             if (term->tab_item && term->tab_item->side_item)
+               edje_object_signal_emit(term->tab_item->side_item,
+                                       "grouped,on", "terminology");
              termio_event_feed_mouse_in(term->termio);
              termio_focus_in(term->termio);
           }
@@ -2433,6 +2484,9 @@ _win_toggle_group(Win *wn)
              elm_layout_signal_emit(term->bg, "grouped,off", "terminology");
              if (term->tab_inactive)
                edje_object_signal_emit(term->tab_inactive,
+                                       "grouped,off", "terminology");
+             if (term->tab_item && term->tab_item->side_item)
+               edje_object_signal_emit(term->tab_item->side_item,
                                        "grouped,off", "terminology");
              termio_focus_out(term->termio);
           }
@@ -3216,6 +3270,8 @@ _cb_tab_activate(void *data,
    Tab_Item *tab_item = data;
    Term *term = _tab_item_to_term(tab_item);
 
+   if (term->wn->on_popover)
+     return;
    term_focus(term);
 }
 
@@ -3293,6 +3349,9 @@ _tab_item_free(Tab_Item *tab_item)
      edje_object_signal_callback_del(term->tab_inactive,
                                      "tab,activate", "terminology",
                                      _cb_tab_activate);
+   if (_tab_side_reorder.item == tab_item)
+     _tabs_side_reorder_end();
+   evas_object_del(tab_item->side_item);
    free(tab_item);
 }
 
@@ -3318,6 +3377,770 @@ _cb_tab_title(void *data,
    Term *term = data;
 
    term_set_title(term);
+}
+
+static Eina_Bool
+_tabs_are_on_side(const Config *config)
+{
+   return config->show_tabs && (config->tabs_position != TABS_POSITION_TOP);
+}
+
+static int
+_tabs_side_bar_column(const Tabs *tabs)
+{
+   return (tabs->side.position == TABS_POSITION_LEFT) ? 0 : 1;
+}
+
+static int
+_tabs_side_content_column(const Tabs *tabs)
+{
+   return (tabs->side.position == TABS_POSITION_LEFT) ? 1 : 0;
+}
+
+static const char *
+_tabs_side_position_signal(const Tabs *tabs)
+{
+   return (tabs->side.position == TABS_POSITION_LEFT) ?
+      "position,left" : "position,right";
+}
+
+static int
+_tabs_side_width_max(const Tabs *tabs)
+{
+   Evas_Coord frame_w = 0;
+
+   evas_object_geometry_get(tabs->side.frame, NULL, NULL, &frame_w, NULL);
+   return frame_w * TABS_SIDE_SHARE_MAX;
+}
+
+static void
+_tabs_side_width_apply(Tabs *tabs)
+{
+   int width = tabs->tc.wn->tabs_side_width;
+   int width_max = _tabs_side_width_max(tabs);
+
+   if ((width_max > 0) && (width > width_max))
+     width = width_max;
+   evas_object_size_hint_min_set(tabs->side.bar_width, width, 0);
+   evas_object_size_hint_min_set(tabs->side.bar_spacer,
+                                 width * tabs->side.shown, 0);
+}
+
+static Eina_Bool
+_tabs_side_shown_anim_cb(void *data, double pos)
+{
+   Tabs *tabs = data;
+   double progress = ecore_animator_pos_map(pos, ECORE_POS_MAP_DECELERATE,
+                                            0.0, 0.0);
+
+   tabs->side.shown = tabs->side.shown_from +
+      (tabs->side.shown_to - tabs->side.shown_from) * progress;
+   _tabs_side_width_apply(tabs);
+   if (pos >= 1.0)
+     {
+        tabs->side.shown_anim = NULL;
+        return ECORE_CALLBACK_CANCEL;
+     }
+   return ECORE_CALLBACK_RENEW;
+}
+
+/* same curve and duration as the tab selector's zoom, to move with it */
+static void
+_tabs_side_shown_animate(Tabs *tabs, double shown, double duration)
+{
+   ecore_animator_del(tabs->side.shown_anim);
+   tabs->side.shown_anim = NULL;
+   if (duration <= 0.0)
+     {
+        tabs->side.shown = shown;
+        _tabs_side_width_apply(tabs);
+        return;
+     }
+   tabs->side.shown_from = tabs->side.shown;
+   tabs->side.shown_to = shown;
+   tabs->side.shown_anim = ecore_animator_timeline_add(
+      duration, _tabs_side_shown_anim_cb, tabs);
+}
+
+static void
+_cb_tabs_side_resize(void *data,
+                     Evas *_e EINA_UNUSED,
+                     Evas_Object *_obj EINA_UNUSED,
+                     void *_event EINA_UNUSED)
+{
+   _tabs_side_width_apply(data);
+}
+
+static Eina_Bool
+_term_tabs_side_width_apply(Term *term, void *_data EINA_UNUSED)
+{
+   Term_Container *tc = term->container;
+
+   if (tc && tc->parent && (tc->parent->type == TERM_CONTAINER_TYPE_TABS))
+     {
+        Tabs *tabs = (Tabs*) tc->parent;
+
+        if (tabs->side.frame)
+          _tabs_side_width_apply(tabs);
+     }
+   return ECORE_CALLBACK_PASS_ON;
+}
+
+static void
+_cb_tabs_side_resizer_mouse_in(void *data,
+                               Evas *_e EINA_UNUSED,
+                               Evas_Object *_obj EINA_UNUSED,
+                               void *_event EINA_UNUSED)
+{
+   Tabs *tabs = data;
+
+   elm_layout_signal_emit(tabs->side.bar, "resize,on", "terminology");
+}
+
+static void
+_cb_tabs_side_resizer_mouse_out(void *data,
+                                Evas *_e EINA_UNUSED,
+                                Evas_Object *_obj EINA_UNUSED,
+                                void *_event EINA_UNUSED)
+{
+   Tabs *tabs = data;
+
+   if (!tabs->side.is_resizing)
+     elm_layout_signal_emit(tabs->side.bar, "resize,off", "terminology");
+}
+
+static void
+_cb_tabs_side_resizer_mouse_down(void *data,
+                                 Evas *_e EINA_UNUSED,
+                                 Evas_Object *_obj EINA_UNUSED,
+                                 void *event)
+{
+   Tabs *tabs = data;
+   Evas_Event_Mouse_Down *ev = event;
+   int width = tabs->tc.wn->tabs_side_width;
+   int width_max = _tabs_side_width_max(tabs);
+
+   if (ev->button != 1)
+     return;
+   tabs->side.resize_press_x = ev->canvas.x;
+   tabs->side.resize_press_width = (width > width_max) ? width_max : width;
+   tabs->side.is_resizing = EINA_TRUE;
+}
+
+static void
+_cb_tabs_side_resizer_mouse_move(void *data,
+                                 Evas *_e EINA_UNUSED,
+                                 Evas_Object *_obj EINA_UNUSED,
+                                 void *event)
+{
+   Tabs *tabs = data;
+   Evas_Event_Mouse_Move *ev = event;
+   Win *wn = tabs->tc.wn;
+   Evas_Coord dx;
+   int width, width_max;
+
+   if (!tabs->side.is_resizing)
+     return;
+   dx = ev->cur.canvas.x - tabs->side.resize_press_x;
+   if (tabs->side.position == TABS_POSITION_RIGHT)
+     dx = -dx;
+   width = tabs->side.resize_press_width + dx;
+   width_max = _tabs_side_width_max(tabs);
+   if (width_max > TABS_SIDE_WIDTH_MAX)
+     width_max = TABS_SIDE_WIDTH_MAX;
+   if (width > width_max)
+     width = width_max;
+   if (width < TABS_SIDE_WIDTH_MIN)
+     width = TABS_SIDE_WIDTH_MIN;
+   if (width == wn->tabs_side_width)
+     return;
+   wn->tabs_side_width = width;
+   for_each_term_do(wn, _term_tabs_side_width_apply, NULL);
+}
+
+static void
+_cb_tabs_side_resizer_mouse_up(void *data,
+                               Evas *_e EINA_UNUSED,
+                               Evas_Object *obj,
+                               void *event)
+{
+   Tabs *tabs = data;
+   Evas_Event_Mouse_Up *ev = event;
+   Eina_Rectangle resizer;
+
+   if (!tabs->side.is_resizing)
+     return;
+   tabs->side.is_resizing = EINA_FALSE;
+   evas_object_geometry_get(obj, &resizer.x, &resizer.y,
+                            &resizer.w, &resizer.h);
+   if (!eina_rectangle_coords_inside(&resizer, ev->canvas.x, ev->canvas.y))
+     elm_layout_signal_emit(tabs->side.bar, "resize,off", "terminology");
+   win_sizing_handle(tabs->tc.wn);
+}
+
+static Evas_Coord
+_tabs_side_list_top(const Tabs *tabs)
+{
+   Evas_Coord y = 0;
+
+   evas_object_geometry_get(tabs->side.list, NULL, &y, NULL, NULL);
+   return y;
+}
+
+static void
+_tabs_side_item_draw_at(Evas_Object *item, Evas_Coord top)
+{
+   Evas_Coord x = 0, w = 0, h = 0;
+   Evas_Map *map = evas_map_new(4);
+
+   if (!map)
+     return;
+   evas_object_geometry_get(item, &x, NULL, &w, &h);
+   evas_map_util_points_populate_from_geometry(map, x, top, w, h, 0);
+   evas_object_map_set(item, map);
+   evas_object_map_enable_set(item, EINA_TRUE);
+   evas_map_free(map);
+}
+
+static void
+_tabs_side_item_draw_in_place(Evas_Object *item)
+{
+   evas_object_map_enable_set(item, EINA_FALSE);
+   evas_object_map_set(item, NULL);
+}
+
+static Evas_Coord
+_tabs_side_item_drawn_top(Evas_Object *item)
+{
+   const Evas_Map *map = evas_object_map_get(item);
+   Evas_Coord y = 0;
+
+   if (map && evas_object_map_enable_get(item))
+     evas_map_point_coord_get(map, 0, NULL, &y, NULL);
+   else
+     evas_object_geometry_get(item, NULL, &y, NULL, NULL);
+   return y;
+}
+
+static Eina_Bool
+_tabs_side_glide_anim_cb(void *data)
+{
+   Tabs *tabs = data;
+   Evas_Coord list_top = _tabs_side_list_top(tabs);
+   double now = ecore_loop_time_get();
+   Eina_Bool is_gliding = EINA_FALSE;
+   Eina_List *l;
+   Tab_Item *tab_item;
+
+   EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+     {
+        double t, progress;
+
+        if (!tab_item->is_gliding)
+          continue;
+        t = (now - tab_item->glide_start) / TABS_SIDE_GLIDE_TIME;
+        if (t >= 1.0)
+          {
+             tab_item->is_gliding = EINA_FALSE;
+             _tabs_side_item_draw_in_place(tab_item->side_item);
+             continue;
+          }
+        progress = ecore_animator_pos_map(t, ECORE_POS_MAP_DECELERATE,
+                                          0.0, 0.0);
+        _tabs_side_item_draw_at(tab_item->side_item, list_top +
+                                tab_item->glide_from +
+                                (tab_item->glide_to - tab_item->glide_from) *
+                                progress);
+        is_gliding = EINA_TRUE;
+     }
+   if (!is_gliding)
+     {
+        tabs->side.glide_anim = NULL;
+        return ECORE_CALLBACK_CANCEL;
+     }
+   return ECORE_CALLBACK_RENEW;
+}
+
+/* positions are from the top of the list, so a scroll does not break a glide */
+static void
+_tabs_side_glide_start(Tabs *tabs, Tab_Item *tab_item, Evas_Coord slot)
+{
+   Evas_Coord list_top = _tabs_side_list_top(tabs);
+   Evas_Coord drawn = _tabs_side_item_drawn_top(tab_item->side_item);
+
+   if (tab_item->is_gliding && (tab_item->glide_to == slot))
+     return;
+   tab_item->glide_from = drawn - list_top;
+   tab_item->glide_to = slot;
+   tab_item->glide_start = ecore_loop_time_get();
+   tab_item->is_gliding = EINA_TRUE;
+   _tabs_side_item_draw_at(tab_item->side_item, drawn);
+   if (!tabs->side.glide_anim)
+     tabs->side.glide_anim = ecore_animator_add(_tabs_side_glide_anim_cb,
+                                                tabs);
+}
+
+static void
+_tabs_side_glide_to_slots(Tabs *tabs, const Tab_Item *dragged)
+{
+   Evas_Coord list_top = _tabs_side_list_top(tabs);
+   Evas_Coord slot = 0;
+   Eina_List *l;
+   Tab_Item *tab_item;
+
+   EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+     {
+        Evas_Coord h = 0;
+
+        evas_object_geometry_get(tab_item->side_item, NULL, NULL, NULL, &h);
+        if ((tab_item != dragged) &&
+            (tab_item->is_gliding ||
+             (_tabs_side_item_drawn_top(tab_item->side_item) !=
+              list_top + slot)))
+          _tabs_side_glide_start(tabs, tab_item, slot);
+        slot += h;
+     }
+}
+
+static void
+_tabs_side_reorder_end(void)
+{
+   Tab_Side_Reorder *reorder = &_tab_side_reorder;
+   Tabs *tabs = reorder->tabs;
+   Tab_Item *dragged = reorder->item;
+
+   if (reorder->is_reordering)
+     {
+        Evas_Coord slot = 0;
+        Eina_List *l;
+        Tab_Item *tab_item;
+
+        edje_object_signal_emit(dragged->side_item, "drag,off",
+                                "terminology");
+        EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+          {
+             Evas_Coord h = 0;
+
+             if (tab_item == dragged)
+               break;
+             evas_object_geometry_get(tab_item->side_item,
+                                      NULL, NULL, NULL, &h);
+             slot += h;
+          }
+        if (tab_item)
+          _tabs_side_glide_start(tabs, dragged, slot);
+        else
+          _tabs_side_item_draw_in_place(dragged->side_item);
+     }
+   elm_object_scroll_hold_pop(tabs->side.list);
+   memset(reorder, 0, sizeof(*reorder));
+}
+
+static void
+_tabs_side_reorder_float(Tabs *tabs, Evas_Object *item, Evas_Coord top)
+{
+   Evas_Coord h = 0, list_y = 0, list_h = 0;
+
+   evas_object_geometry_get(item, NULL, NULL, NULL, &h);
+   evas_object_geometry_get(tabs->side.list, NULL, &list_y, NULL, &list_h);
+   if (top > list_y + list_h - h)
+     top = list_y + list_h - h;
+   if (top < list_y)
+     top = list_y;
+   _tabs_side_item_draw_at(item, top);
+}
+
+static void
+_tabs_side_reorder_to(Tabs *tabs, Tab_Item *dragged, Evas_Coord y)
+{
+   int count = eina_list_count(tabs->tabs);
+   int *heights;
+   int i = 0, from = 0, to;
+   Evas_Coord list_y = 0;
+   Eina_List *l;
+   Tab_Item *tab_item, *next;
+
+   heights = malloc(count * sizeof(*heights));
+   if (!heights)
+     return;
+   EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+     {
+        Evas_Coord h = 0;
+
+        evas_object_geometry_get(tab_item->side_item, NULL, NULL, NULL, &h);
+        heights[i] = h;
+        if (tab_item == dragged)
+          from = i;
+        i++;
+     }
+   evas_object_geometry_get(tabs->side.list, NULL, &list_y, NULL, NULL);
+   to = tab_reorder_index(heights, count, from, y - list_y);
+   free(heights);
+   if (to == from)
+     return;
+
+   tabs->tabs = eina_list_remove(tabs->tabs, dragged);
+   next = eina_list_nth(tabs->tabs, to);
+   elm_box_unpack(tabs->side.list, dragged->side_item);
+   if (next)
+     {
+        tabs->tabs = eina_list_prepend_relative(tabs->tabs, dragged, next);
+        elm_box_pack_before(tabs->side.list, dragged->side_item,
+                            next->side_item);
+     }
+   else
+     {
+        tabs->tabs = eina_list_append(tabs->tabs, dragged);
+        elm_box_pack_end(tabs->side.list, dragged->side_item);
+     }
+   evas_object_raise(dragged->side_item);
+   _tabs_side_glide_to_slots(tabs, dragged);
+}
+
+static void
+_cb_tabs_side_item_mouse_down(void *data,
+                              Evas *e,
+                              Evas_Object *obj,
+                              void *event)
+{
+   Tab_Item *tab_item = data;
+   Evas_Event_Mouse_Down *ev = event;
+   Tab_Side_Reorder *reorder = &_tab_side_reorder;
+   Eina_Rectangle close_button;
+   Evas_Coord x = 0, y = 0, pointer_y = 0;
+
+   /* the title popup of a double click may take the mouse up */
+   if ((ev->button != 1) || (ev->flags & EVAS_BUTTON_DOUBLE_CLICK) ||
+       (ev->event_flags & EVAS_EVENT_FLAG_ON_HOLD) || reorder->item)
+     return;
+   evas_object_geometry_get(obj, &x, &y, NULL, NULL);
+   edje_object_part_geometry_get(obj, "tabclose",
+                                 &close_button.x, &close_button.y,
+                                 &close_button.w, &close_button.h);
+   if (eina_rectangle_coords_inside(&close_button,
+                                    ev->canvas.x - x, ev->canvas.y - y))
+     return;
+
+   assert(tab_item->tc->parent->type == TERM_CONTAINER_TYPE_TABS);
+   reorder->tabs = (Tabs*) tab_item->tc->parent;
+   reorder->item = tab_item;
+   evas_pointer_canvas_xy_get(e, NULL, &pointer_y);
+   reorder->press_dy = pointer_y - _tabs_side_item_drawn_top(obj);
+   elm_object_scroll_hold_push(reorder->tabs->side.list);
+}
+
+/* evas maps the coordinates of events on a mapped object back to where it
+ * would be unmapped: the pointer is read from the canvas instead */
+static void
+_cb_tabs_side_item_mouse_move(void *data,
+                              Evas *e,
+                              Evas_Object *obj,
+                              void *event)
+{
+   Evas_Event_Mouse_Move *ev = event;
+   Tab_Side_Reorder *reorder = &_tab_side_reorder;
+   Evas_Coord pointer_y = 0;
+
+   if (reorder->item != data)
+     return;
+   if (!(ev->buttons & 1))
+     {
+        _tabs_side_reorder_end();
+        return;
+     }
+   if (!reorder->is_reordering)
+     {
+        reorder->is_reordering = EINA_TRUE;
+        reorder->item->is_gliding = EINA_FALSE;
+        edje_object_signal_emit(obj, "drag,on", "terminology");
+        evas_object_raise(obj);
+     }
+   evas_pointer_canvas_xy_get(e, NULL, &pointer_y);
+   _tabs_side_reorder_to(reorder->tabs, reorder->item, pointer_y);
+   _tabs_side_reorder_float(reorder->tabs, obj,
+                            pointer_y - reorder->press_dy);
+}
+
+static void
+_cb_tabs_side_item_mouse_up(void *data,
+                            Evas *_e EINA_UNUSED,
+                            Evas_Object *_obj EINA_UNUSED,
+                            void *_event EINA_UNUSED)
+{
+   if (_tab_side_reorder.item == data)
+     _tabs_side_reorder_end();
+}
+
+static void
+_tabs_side_item_height_update(Evas_Object *item)
+{
+   Evas_Coord w = 0, min_w = 0, min_h = 0, cur_w = 0, cur_h = 0;
+
+   evas_object_geometry_get(item, NULL, NULL, &w, NULL);
+   if (w > 0)
+     edje_object_size_min_restricted_calc(item, &min_w, &min_h, w, 0);
+   else
+     edje_object_size_min_calc(item, &min_w, &min_h);
+   evas_object_size_hint_min_get(item, &cur_w, &cur_h);
+   if (min_h != cur_h)
+     evas_object_size_hint_min_set(item, 0, min_h);
+}
+
+static void
+_cb_tabs_side_item_resize(void *_data EINA_UNUSED,
+                          Evas *_e EINA_UNUSED,
+                          Evas_Object *obj,
+                          void *_event EINA_UNUSED)
+{
+   _tabs_side_item_height_update(obj);
+}
+
+static void
+_tabs_side_item_title_set(Tab_Item *tab_item, const char *title)
+{
+   edje_object_part_text_unescaped_set(tab_item->side_item,
+                                       "terminology.title", title);
+   _tabs_side_item_height_update(tab_item->side_item);
+}
+
+static Evas_Object *
+_tabs_side_item_get_or_create(Tabs *tabs, Tab_Item *tab_item)
+{
+   Term *term = _tab_item_to_term(tab_item);
+   Evas_Object *o = tab_item->side_item;
+
+   if (!o)
+     {
+        o = edje_object_add(evas_object_evas_get(tabs->side.list));
+        theme_apply(o, term->config, "terminology/tabbar_vertical/item",
+                    NULL, NULL, EINA_FALSE);
+        evas_object_size_hint_weight_set(o, EVAS_HINT_EXPAND, 0.0);
+        evas_object_size_hint_align_set(o, EVAS_HINT_FILL, 0.0);
+        evas_object_event_callback_add(o, EVAS_CALLBACK_RESIZE,
+                                       _cb_tabs_side_item_resize, NULL);
+        evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_DOWN,
+                                       _cb_tabs_side_item_mouse_down,
+                                       tab_item);
+        evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_MOVE,
+                                       _cb_tabs_side_item_mouse_move,
+                                       tab_item);
+        evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_UP,
+                                       _cb_tabs_side_item_mouse_up,
+                                       tab_item);
+        edje_object_signal_callback_add(o, "tab,activate", "terminology",
+                                        _cb_tab_activate, tab_item);
+        edje_object_signal_callback_add(o, "tab,close", "terminology",
+                                        _cb_tab_close, term);
+        edje_object_signal_callback_add(o, "tab,title", "terminology",
+                                        _cb_tab_title, term);
+        edje_object_signal_emit(o, _tabs_side_position_signal(tabs),
+                                "terminology");
+        tab_item->side_item = o;
+     }
+   if (tab_item == tabs->current)
+     edje_object_signal_emit(o, "selected", "terminology");
+   else
+     {
+        edje_object_signal_emit(o, "unselected", "terminology");
+        edje_object_signal_emit(o, term->missed_bell ? "bell" : "bell,off",
+                                "terminology");
+     }
+   if (term->wn->group_input &&
+       (!term->wn->group_only_visible || term_is_visible(term)))
+     edje_object_signal_emit(o, "grouped,on", "terminology");
+   else
+     edje_object_signal_emit(o, "grouped,off", "terminology");
+   _tabs_side_item_title_set(tab_item, tab_item->tc->title);
+   return o;
+}
+
+static void
+_tabs_side_selected_show(Tabs *tabs, const Tab_Item *selected)
+{
+   Eina_List *l;
+   Tab_Item *tab_item;
+
+   EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+     {
+        if (tab_item->side_item)
+          edje_object_signal_emit(tab_item->side_item,
+                                  (tab_item == selected) ?
+                                  "selected" : "unselected",
+                                  "terminology");
+     }
+}
+
+static void
+_tabs_side_fill(Tabs *tabs)
+{
+   Eina_List *l;
+   Tab_Item *tab_item;
+
+   elm_box_unpack_all(tabs->side.list);
+   EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+     {
+        Evas_Object *o = _tabs_side_item_get_or_create(tabs, tab_item);
+
+        elm_box_pack_end(tabs->side.list, o);
+        evas_object_show(o);
+     }
+}
+
+static void
+_tabs_side_content_set(Tabs *tabs, Evas_Object *wanted)
+{
+   Evas_Object *shown = tabs->side.content;
+
+   if (shown == wanted)
+     return;
+   if (shown)
+     {
+        elm_table_unpack(tabs->side.frame, shown);
+        evas_object_hide(shown);
+     }
+   elm_table_pack(tabs->side.frame, wanted, _tabs_side_content_column(tabs),
+                  0, 1, 1);
+   tabs->side.content = wanted;
+   evas_object_show(wanted);
+}
+
+static void
+_tabs_side_content_show(Tabs *tabs)
+{
+   Term_Container *tc_current = tabs->current->tc;
+
+   _tabs_side_content_set(tabs, tc_current->get_evas_object(tc_current));
+}
+
+static void
+_tabs_side_create(Tabs *tabs)
+{
+   Win *wn = tabs->tc.wn;
+   Evas *canvas = evas_object_evas_get(wn->win);
+   Evas_Object *o;
+
+   tabs->side.position = wn->config->tabs_position;
+   tabs->side.shown = 1.0;
+
+   tabs->side.frame = o = elm_table_add(wn->win);
+   evas_object_size_hint_weight_set(o, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+   evas_object_size_hint_align_set(o, EVAS_HINT_FILL, EVAS_HINT_FILL);
+   evas_object_event_callback_add(o, EVAS_CALLBACK_RESIZE,
+                                  _cb_tabs_side_resize, tabs);
+
+   tabs->side.bar_spacer = o = evas_object_rectangle_add(canvas);
+   evas_object_color_set(o, 0, 0, 0, 0);
+   evas_object_size_hint_weight_set(o, 0.0, EVAS_HINT_EXPAND);
+   evas_object_size_hint_align_set(o, EVAS_HINT_FILL, EVAS_HINT_FILL);
+
+   tabs->side.bar = o = elm_layout_add(wn->win);
+   theme_apply(o, wn->config, "terminology/tabbar_vertical/base",
+               NULL, NULL, EINA_TRUE);
+   evas_object_size_hint_weight_set(o, 0.0, EVAS_HINT_EXPAND);
+   evas_object_size_hint_align_set(o, EVAS_HINT_FILL, EVAS_HINT_FILL);
+   elm_layout_signal_emit(o, _tabs_side_position_signal(tabs), "terminology");
+   elm_layout_signal_callback_add(o, "tab,*", "terminology",
+                                  _cb_tabs_side_tab_btn, tabs);
+
+   tabs->side.bar_width = o = evas_object_rectangle_add(canvas);
+   evas_object_color_set(o, 0, 0, 0, 0);
+   elm_layout_content_set(tabs->side.bar, "terminology.width", o);
+   _tabs_side_width_apply(tabs);
+
+   tabs->side.resizer = o = evas_object_rectangle_add(canvas);
+   evas_object_color_set(o, 0, 0, 0, 0);
+   elm_object_cursor_set(o, ELM_CURSOR_SB_H_DOUBLE_ARROW);
+   evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_IN,
+                                  _cb_tabs_side_resizer_mouse_in, tabs);
+   evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_OUT,
+                                  _cb_tabs_side_resizer_mouse_out, tabs);
+   evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_DOWN,
+                                  _cb_tabs_side_resizer_mouse_down, tabs);
+   evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_MOVE,
+                                  _cb_tabs_side_resizer_mouse_move, tabs);
+   evas_object_event_callback_add(o, EVAS_CALLBACK_MOUSE_UP,
+                                  _cb_tabs_side_resizer_mouse_up, tabs);
+   elm_layout_content_set(tabs->side.bar, "terminology.resize", o);
+   evas_object_show(o);
+
+   tabs->side.scroller = o = elm_scroller_add(wn->win);
+   elm_object_focus_allow_set(o, EINA_FALSE);
+   elm_scroller_policy_set(o, ELM_SCROLLER_POLICY_OFF,
+                           ELM_SCROLLER_POLICY_AUTO);
+   elm_scroller_bounce_set(o, EINA_FALSE, EINA_FALSE);
+   evas_object_size_hint_weight_set(o, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+   evas_object_size_hint_align_set(o, EVAS_HINT_FILL, EVAS_HINT_FILL);
+
+   tabs->side.list = o = elm_box_add(wn->win);
+   elm_box_align_set(o, 0.5, 0.0);
+   evas_object_size_hint_weight_set(o, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+   evas_object_size_hint_align_set(o, EVAS_HINT_FILL, EVAS_HINT_FILL);
+
+   elm_object_content_set(tabs->side.scroller, tabs->side.list);
+   elm_layout_content_set(tabs->side.bar, "terminology.content",
+                          tabs->side.scroller);
+   elm_table_pack(tabs->side.frame, tabs->side.bar_spacer,
+                  _tabs_side_bar_column(tabs), 0, 1, 1);
+   elm_table_pack(tabs->side.frame, tabs->side.bar,
+                  _tabs_side_bar_column(tabs), 0, 1, 1);
+   evas_object_show(tabs->side.list);
+   evas_object_show(tabs->side.scroller);
+   evas_object_show(tabs->side.bar);
+   evas_object_show(tabs->side.frame);
+}
+
+/* The frame deletes what it still holds: take out the items, owned by their
+ * Tab_Item, and the current tab's object first. */
+static void
+_tabs_side_free(Tabs *tabs)
+{
+   Eina_List *l;
+   Tab_Item *tab_item;
+
+   if (!tabs->side.frame)
+     return;
+
+   ecore_animator_del(tabs->side.shown_anim);
+   ecore_animator_del(tabs->side.glide_anim);
+   /* the scroll hold goes away with the scroller */
+   if (_tab_side_reorder.tabs == tabs)
+     memset(&_tab_side_reorder, 0, sizeof(_tab_side_reorder));
+   elm_box_unpack_all(tabs->side.list);
+   EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+     {
+        evas_object_del(tab_item->side_item);
+        tab_item->side_item = NULL;
+        tab_item->is_gliding = EINA_FALSE;
+     }
+   if (tabs->side.content)
+     {
+        elm_table_unpack(tabs->side.frame, tabs->side.content);
+        evas_object_hide(tabs->side.content);
+     }
+   evas_object_del(tabs->side.frame);
+   memset(&tabs->side, 0, sizeof(tabs->side));
+}
+
+static void
+_tabs_side_sync(Tabs *tabs)
+{
+   Term_Container *tc = &tabs->tc;
+   const Config *config = tc->wn->config;
+   Eina_Bool wanted = _tabs_are_on_side(config);
+
+   if (tabs->side.frame &&
+       (!wanted || (tabs->side.position != config->tabs_position)))
+     {
+        _tabs_side_free(tabs);
+        if (!wanted)
+          tc->parent->swallow(tc->parent, tc, tc);
+     }
+   if (wanted && !tabs->side.frame)
+     {
+        _tabs_side_create(tabs);
+        tc->parent->swallow(tc->parent, tc, tc);
+        _tabs_side_content_show(tabs);
+     }
 }
 
 
@@ -3826,10 +4649,15 @@ _tab_drag_rollback_tabs(void)
    tc_win->unfocus(tc_win, NULL);
    tc->focus(tc, NULL);
 
-   /* Repack in correct boxes */
-   elm_box_unpack_all(term->tabbar.l.box);
-   elm_box_unpack_all(term->tabbar.r.box);
-   _tabbar_fill(tabs);
+   if (tabs->side.frame)
+     _tabs_side_fill(tabs);
+   else
+     {
+        /* Repack in correct boxes */
+        elm_box_unpack_all(term->tabbar.l.box);
+        elm_box_unpack_all(term->tabbar.r.box);
+        _tabbar_fill(tabs);
+     }
 
    _tab_drag_reparented();
 }
@@ -4382,8 +5210,13 @@ _tabs_restore(Tabs *tabs)
    tabs->selector = NULL;
    tabs->selector_bg = NULL;
 
-   /* XXX: reswallow in parent */
-   tc->parent->swallow(tc->parent, tc, tc);
+   if (tabs->side.frame)
+     _tabs_side_shown_animate(tabs, 1.0, 0.0);
+   else
+     {
+        /* XXX: reswallow in parent */
+        tc->parent->swallow(tc->parent, tc, tc);
+     }
    solo = (Solo*)tabs->current->tc;
    term = solo->term;
    _tabbar_clear(term);
@@ -4407,6 +5240,19 @@ _tabs_selector_cb_ending(void *data,
    Tabs *tabs = data;
 
    edje_object_signal_emit(tabs->selector_bg, "end", "terminology");
+   if (tabs->side.frame)
+     {
+        Evas_Object *img = sel_entry_selected_get(tabs->selector);
+        Eina_List *l;
+        Tab_Item *tab_item;
+
+        EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+          {
+             if (tab_item->tc->selector_img == img)
+               _tabs_side_selected_show(tabs, tab_item);
+          }
+        _tabs_side_shown_animate(tabs, 1.0, tabs->tc.wn->config->tab_zoom);
+     }
 }
 
 static void
@@ -4464,8 +5310,22 @@ _cb_tab_selector_show(Tabs *tabs, Tab_Item *to_item)
    theme_apply(tabs->selector_bg, wn->config, "terminology/sel/base",
                NULL, NULL, EINA_FALSE);
 
-   evas_object_geometry_set(tabs->selector_bg, x, y, w, h);
-   evas_object_hide(o);
+   if (tabs->side.frame)
+     {
+        evas_object_geometry_get(tabs->side.content, &x, &y, &w, &h);
+        evas_object_geometry_set(tabs->selector_bg, x, y, w, h);
+        evas_object_size_hint_weight_set(tabs->selector_bg,
+                                         EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+        evas_object_size_hint_align_set(tabs->selector_bg,
+                                        EVAS_HINT_FILL, EVAS_HINT_FILL);
+        _tabs_side_content_set(tabs, tabs->selector_bg);
+        _tabs_side_shown_animate(tabs, 0.0, wn->config->tab_zoom);
+     }
+   else
+     {
+        evas_object_geometry_set(tabs->selector_bg, x, y, w, h);
+        evas_object_hide(o);
+     }
 
    if (wn->config->translucent)
      msg.val = wn->config->opacity;
@@ -4513,7 +5373,8 @@ _cb_tab_selector_show(Tabs *tabs, Tab_Item *to_item)
    evas_object_show(tabs->selector);
 
    /* XXX: refresh */
-   tc->parent->swallow(tc->parent, tc, tc);
+   if (!tabs->side.frame)
+     tc->parent->swallow(tc->parent, tc, tc);
 
    evas_object_show(tabs->selector_bg);
    evas_object_smart_callback_add(tabs->selector, "selected",
@@ -4578,6 +5439,8 @@ _tabs_get_evas_object(const Term_Container *container)
    assert (container->type == TERM_CONTAINER_TYPE_TABS);
    tabs = (Tabs*)container;
 
+   if (tabs->side.frame)
+     return tabs->side.frame;
    if (tabs->selector_bg)
      return tabs->selector_bg;
 
@@ -4628,6 +5491,14 @@ _tabs_size_eval(Term_Container *container, Sizeinfo *info)
    tc = tabs->current->tc;
    config = tc->wn->config;
    tc->size_eval(tc, info);
+   if (tabs->side.frame)
+     {
+        int side_width = container->wn->tabs_side_width;
+
+        info->min_w += side_width;
+        info->req_w += side_width;
+        info->bg_min_w += side_width;
+     }
    /* Current sizing code does not take the tab area correctly into account */
    if (config->show_tabs)
      {
@@ -4734,6 +5605,7 @@ _tabs_close(Term_Container *tc, Term_Container *child)
 
         eina_stringshare_del(tc->title);
 
+        _tabs_side_free(tabs);
         tc_parent->swallow(tc_parent, tc, next_child);
         if (tc->is_focused)
           next_child->focus(next_child, tc);
@@ -5022,6 +5894,14 @@ _tabs_swallow(Term_Container *tc, Term_Container *orig,
    /* Remove tab effects from the previous focused tab */
    elm_layout_signal_emit(term_orig->bg, "tabcount,off", "terminology");
 
+   if (tabs->side.frame)
+     {
+        _tabbar_clear(term_new);
+        _tabs_side_content_show(tabs);
+        _tabs_side_fill(tabs);
+        return;
+     }
+
    if (term_new->config->show_tabs)
      {
         _tabs_get_or_create_boxes(term_new, term_orig);
@@ -5045,11 +5925,8 @@ _tabs_swallow(Term_Container *tc, Term_Container *orig,
 
 
 static void
-_tab_new_cb(void *data,
-            Evas_Object *_obj EINA_UNUSED,
-            void *_event_info EINA_UNUSED)
+_tabs_tab_new(Tabs *tabs, const char *cmd)
 {
-   Tabs *tabs = data;
    Term_Container *tc = (Term_Container*) tabs,
                   *tc_new;
    Term *tm_new;
@@ -5070,7 +5947,7 @@ _tab_new_cb(void *data,
      }
 
    tm_new = term_new(wn, wn->config,
-                     NULL, wn->config->login_shell, wdir,
+                     cmd, wn->config->login_shell, wdir,
                      80, 24, EINA_FALSE, NULL);
    tc_new = _solo_new(tm_new, wn);
    evas_object_data_set(tm_new->termio, "sizedone", tm_new->termio);
@@ -5088,7 +5965,7 @@ _cb_new(void *data,
 
    assert (tc->type == TERM_CONTAINER_TYPE_SOLO);
 
-   _solo_tabs_new(tc);
+   _solo_tabs_new(tc, NULL);
    _focus_validator();
 }
 
@@ -5112,6 +5989,18 @@ main_new(Evas_Object *term)
    if (!tm) return;
 
    _cb_new(tm, term, NULL);
+}
+
+void
+tab_new(Evas_Object *term, const char *cmd)
+{
+   Term *tm;
+
+   tm = evas_object_data_get(term, "term");
+   if (!tm) return;
+
+   _solo_tabs_new(tm->container, cmd);
+   _focus_validator();
 }
 
 static void
@@ -5239,6 +6128,8 @@ _tabs_bell(Term_Container *tc,
 
    if (term->tab_inactive && term->missed_bell)
      edje_object_signal_emit(term->tab_inactive, "bell", "terminology");
+   if (term->tab_item && term->tab_item->side_item && term->missed_bell)
+     edje_object_signal_emit(term->tab_item->side_item, "bell", "terminology");
 
    EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
      {
@@ -5289,6 +6180,8 @@ _tabs_set_title(Term_Container *tc, Term_Container *child,
      {
         sel_entry_title_set(tab_item->selector_entry, title);
      }
+   if (tab_item->side_item)
+     _tabs_side_item_title_set(tab_item, title);
 
    assert (tab_item->tc->type == TERM_CONTAINER_TYPE_SOLO);
    solo = (Solo*)tab_item->tc;
@@ -5329,6 +6222,8 @@ _tabs_recreate(Tabs *tabs)
         ERR("no tab");
         return;
      }
+   if (tabs->selector)
+     return;
 
    EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
      {
@@ -5350,6 +6245,23 @@ _tabs_recreate(Tabs *tabs)
    solo = (Solo*)tab_item->tc;
    term = solo->term;
 
+   _tabs_side_sync(tabs);
+   if (tabs->side.frame)
+     {
+        EINA_LIST_FOREACH(tabs->tabs, l, tab_item)
+          {
+             Term *tab_term = _tab_item_to_term(tab_item);
+
+             _tabbar_clear(tab_term);
+             elm_layout_signal_emit(tab_term->bg, "tab_btn,off",
+                                    "terminology");
+             elm_layout_signal_emit(tab_term->bg, "tabcount,off",
+                                    "terminology");
+          }
+        _tabs_side_content_show(tabs);
+        _tabs_side_fill(tabs);
+        return;
+     }
 
    // this is all below just for tab bar at the top
    if (term->config->show_tabs)
@@ -5498,8 +6410,18 @@ _tabs_new(Term_Container *child, Term_Container *parent)
    tab_item = tab_item_new(tabs, child);
    tabs->current = tab_item;
 
+   if (_tabs_are_on_side(wn->config))
+     _tabs_side_create(tabs);
+
    /* XXX: need to refresh */
    parent->swallow(parent, child, tc);
+
+   if (tabs->side.frame)
+     {
+        _tabbar_clear(((Solo*) child)->term);
+        _tabs_side_content_show(tabs);
+        _tabs_side_fill(tabs);
+     }
 
    tc->is_focused = child->is_focused;
 
@@ -7268,6 +8190,25 @@ _cb_tab_next(void *data,
                   const char *_src EINA_UNUSED)
 {
    _cb_next(data, NULL, NULL);
+}
+
+static void
+_cb_tabs_side_tab_btn(void *data,
+                      Evas_Object *obj,
+                      const char *sig,
+                      const char *src)
+{
+   Tabs *tabs = data;
+   Term *term = _tab_item_to_term(tabs->current);
+
+   if (!strcmp(sig, "tab,go"))
+     _cb_tab_go(term, obj, sig, src);
+   else if (!strcmp(sig, "tab,new"))
+     _cb_tab_new(term, obj, sig, src);
+   else if (!strcmp(sig, "tab,prev"))
+     _cb_tab_prev(term, obj, sig, src);
+   else if (!strcmp(sig, "tab,next"))
+     _cb_tab_next(term, obj, sig, src);
 }
 
 
